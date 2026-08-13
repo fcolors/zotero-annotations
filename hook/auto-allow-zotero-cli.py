@@ -57,17 +57,20 @@ import sys
 # Match the packaged executable ONLY as the command itself (the token right
 # after a command boundary), not as an argument to another tool. Allows:
 #   - a multi-level path prefix: C:\...\dist\...\ , .\dist\...\ , /opt/.../
+#   - a quoted full path: "C:\...\zotero_annotations_cli.exe" --key ... (Windows)
 #   - a chained-command prefix: `cd dist && zotero_annotations_cli.exe ...`
 # The name must be `zotero_annotations_cli` (+ optional `.exe`) and be followed
-# by whitespace or end-of-line. Commands where the CLI is NOT the command
-# itself are not matched: `python3 ...zotero_annotations_cli.py`,
+# by an optional closing quote, then whitespace or end-of-line. Commands where
+# the CLI is NOT the command itself are not matched: `python3 ...cli.py`,
 # `cat ...zotero_annotations_cli.py`, `vim ...zotero_annotations_cli.exe`,
 # `echo zotero_annotations_cli.exe`.
 ALLOW_PATTERNS = [
     (re.compile(
         r"(?:^|(?:[;|&]|&&)\s*)"
+        r"\"?"
         r"(?:[^\s;|&]*[\\/])*"
-        r"zotero_annotations_cli(?:\.exe)?(?=\s|$)"
+        r"zotero_annotations_cli(?:\.exe)?"
+        r"\"?(?=\s|$)"
      ),
      "Zotero 批注 CLI 可执行文件（只读：本地 API 元数据 + 本地 PDF 原文，安全）"),
 ]

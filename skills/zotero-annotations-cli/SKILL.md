@@ -10,15 +10,29 @@ CLI 打包后为**独立可执行文件**，与 Python 完全解耦：运行 `zo
 上下文"为**一个命令**：给上下文参数就自动进入上下文模式，否则是元数据模式。全程只读
 （Zotero 本地 API + 本地 PDF），对应钩子对本命令**所有调用全放行**（只读安全）。
 
+## 可执行文件位置
+
+本 skill 的 `scripts/` 目录下放的就是**打包好的可执行文件**（onedir 目录，exe 依赖同目录
+`_internal/`，勿单独移动）。按 skill 规范，AI 加载本 skill 后优先启动 `scripts/` 下的
+可执行文件：
+
+- 全局安装后：`<skill目录>/scripts/zotero_annotations_cli/zotero_annotations_cli.exe`
+
 ```bash
-zotero_annotations_cli [--key AAAA0000 | --query "示例标题" | --collection 示例合集] [选项]
+# 调用方式（Windows）
+<skill目录>/scripts/zotero_annotations_cli/zotero_annotations_cli.exe --key AAAA0000
 ```
 
 > 定位方式任选其一：`--key`（最快最精确）/ `--query` / `--query --collection`。
+> `scripts/` 下只有可执行文件（exe），不包含 .py 源码；构建源码只存在于仓库
+> `skills/zotero-annotations-cli/scripts/zotero_annotations_cli.py`，仅用于打包，不是运行形态。
 
 ## 元数据模式（默认）
 
 不读 PDF，纯标准库逻辑，增量缓存。只要**不给**上下文参数即进入：
+
+> 以下示例中 `zotero_annotations_cli` 均指本 skill 内的可执行文件
+> `<skill目录>/scripts/zotero_annotations_cli/zotero_annotations_cli.exe`（Windows）。
 
 ```bash
 zotero_annotations_cli --key AAAA0000
