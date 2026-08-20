@@ -10,7 +10,9 @@
 
 - **与 Python 解耦**：运行形态是打包好的可执行文件 `zotero_annotations_cli.exe`，不需要
   安装 Python / PyMuPDF。
-- **全程只读**：只连本机 Zotero 本地 API（端口 23119）+ 读本地 Zotero 存储里的 PDF，
+- **全程只读**：元数据/批注走本机 Zotero 本地 API（端口 23119）；PDF 原文经
+  `zotero-pdf-bridge` 插件的 `/pdf-bridge/<itemKey>` 只读获取（base64），
+  不访问 Windows 文件系统（无 `/mnt`、无 `C:`、无 `~/Zotero/storage`），
   不写库、不改 PDF、不下载。
 
 ## 部署其实就是两件事
@@ -110,7 +112,10 @@ copy hook\auto-allow-zotero-cli.py C:\Users\<用户名>\.zcode\hooks\
 - Zotero 桌面版运行中，且已开启本地 API：
   Settings（Preferences）→ Advanced → Server → "Allow other applications on this
   system to communicate with Zotero"，然后重启 Zotero。
-- 文献要有 PDF 附件，且 PDF 已在本地（Zotero 存储同步完成）。
+- 文献要有 PDF 附件，且 PDF 已在 Zotero 本地同步完成。
+- **读 PDF 原文（上下文/全文/导出）还需安装 `zotero-pdf-bridge` 插件**：GitHub
+  Releases 下载 `zotero-pdf-bridge.xpi` → Zotero → Plugins / Add-ons → Install
+  Add-on From File。只看批注元数据则不需要。详见仓库 `zotero-pdf-bridge/README.md`。
 
 ---
 
@@ -135,7 +140,16 @@ zotero-annotations-cli-release/
 > **不要把 exe 单独拷走**：`zotero_annotations_cli.exe` 依赖同目录 `_internal/`，
 > 必须整个 `bin/zotero_annotations_cli/` 目录一起拷贝/压缩。
 
-## 重新构建（可选）
+## 依赖
+
+- **正式分发（exe）零依赖**：onedir 可执行文件自带 PyMuPDF 等运行时，终端用户免装 Python。
+- **直接跑 .py 做开发/调试**：元数据模式仅用 Python 标准库；只有**上下文模式**（读 PDF
+  原文）需要 PyMuPDF，装一次即可：
+  ```bash
+  python3 -m pip install -r skills/zotero-annotations-cli/requirements.txt
+  ```
+  缺失时上下文模式报 `ERROR 500 DEPENDENCY_MISSING`，元数据模式不受影响。
+- 打包 CLI 本体需要 PyInstaller + PyMuPDF（见下方「打包」命令）。
 
 源码在 `skills/zotero-annotations-cli/scripts/zotero_annotations_cli.py`。如需自行打包：
 

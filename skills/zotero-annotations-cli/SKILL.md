@@ -8,7 +8,8 @@ description: Zotero 批注命令行工具（独立可执行文件，与 Python �
 CLI 打包后为**独立可执行文件**，与 Python 完全解耦：运行 `zotero_annotations_cli`（Windows 下
 `zotero_annotations_cli.exe`），不需要 Python/PyMuPDF。合并了"读批注元数据"与"读批注原文
 上下文"为**一个命令**：给上下文参数就自动进入上下文模式，否则是元数据模式。全程只读
-（Zotero 本地 API + 本地 PDF），对应钩子对本命令**所有调用全放行**（只读安全）。
+（元数据/批注走 Zotero 本地 API；PDF 原文走 zotero-pdf-bridge 的 `/pdf-bridge/<itemKey>`，
+不访问 Windows 文件系统），对应钩子对本命令**所有调用全放行**（只读安全）。
 
 ## 可执行文件位置
 
@@ -44,7 +45,8 @@ zotero_annotations_cli --key AAAA0000 --json
 ## 上下文模式（给了上下文参数任一只即进入）
 
 按批注的精确位置（`annotationPosition`）从 PDF 提取高亮处所在句及前后 N 句。
-**只在用户明确要求看批注原文/前后几句/解释时使用**；会读取 Zotero 本地存储的 PDF（只读）。
+**只在用户明确要求看批注原文/前后几句/解释时使用**；经 `zotero-pdf-bridge` 只读获取 PDF
+（需在 Zotero 安装 `zotero-pdf-bridge.xpi`，见 `zotero-pdf-bridge/README.md`）。
 
 ```bash
 zotero_annotations_cli --key AAAA0000 --color red
@@ -99,12 +101,27 @@ zotero_annotations_cli --key AAAA0000 --color red --json
 | 404 NOT_FOUND | 集合/条目未找到 | 转告命令输出的文字；集合不存在会列出可用集合名 |
 | 300 MULTIPLE_CHOICES | 标题歧义 | 命令列出候选 key，请用户用 `--key` 指定 |
 | 422 UNPROCESSABLE_ENTITY | 条目无 PDF 附件 | 如实说明，可能只有网页快照 |
-| 404 PDF_NOT_FOUND | 本地找不到 PDF 文件 | 附件可能未同步或为网页快照 |
+| 404 PDF_NOT_FOUND | PDF Bridge 取不到 PDF（未装插件/未同步/网页快照） | 让用户装 `zotero-pdf-bridge.xpi`（GitHub Releases → Zotero → Plugins → Install Add-on From File）后重试 |
+
+## 依赖（只有上下文模式需要，且仅直接跑 .py 时）
+
+- **元数据模式 = 纯标准库，零第三方依赖**：任何装了 Python 3 的机器都能直接
+  `python3 scripts/zotero_annotations_cli.py --key XXXX`，无需安装任何东西。
+- **上下文模式（读 PDF 原文）需要 PyMuPDF**：脚本先 `import pymupdf`，失败回退
+  `import fitz`，都没有则 `fitz = None`；此时元数据模式照常可用，只有上下文模式
+  报 `ERROR 500 DEPENDENCY_MISSING`，提示按下面安装。
+- 直接跑 `.py` 且要用上下文模式时才需要装：
+  ```bash
+  python3 -m pip install -r <skill目录>/requirements.txt
+  ```
+- **正式分发不用装**：打包后的可执行文件（onedir exe）已内置 PyMuPDF；上述
+  `requirements.txt` 只服务「直接运行 .py 做开发/调试」的场景。
 
 ## 钩子
 
 `hook/auto-allow-zotero-cli.py` 对本可执行文件的**所有调用**（元数据 + 上下文 + 导出）一律放行，
-因为整个命令只读（只发本地 API GET + 读本地 PDF），安全边界成立。它**只匹配可执行文件
+因为整个命令只读（本地 API GET + 经 zotero-pdf-bridge 只读取 PDF，不碰 Windows 文件系统），
+安全边界成立。它**只匹配可执行文件
 作为命令本身**（支持 Windows/Unix 路径前缀、链式命令），不匹配 `cat`/`vim`/`echo` 等其它用法。
 若将来给 CLI 增加写/改数据的参数，需重新收紧钩子白名单。
 

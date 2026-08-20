@@ -17,7 +17,11 @@
 
 ## 设计要点
 
-- **不依赖任何 Zotero 插件**：只依赖 Zotero 桌面版自身的本地 API（端口 `23119`）是否开启；读批注元数据是纯标准库（`urllib` 发 HTTP GET），全程只读、绝不写库
+- **元数据/批注不依赖任何插件**：只依赖 Zotero 桌面版自带的本地 API（端口 `23119`），
+  纯标准库（`urllib` 发 HTTP GET），全程只读、绝不写库。
+- **PDF 原文走 Zotero PDF Bridge**：需要读 PDF 原文（上下文/全文/导出）时，通过仓库自带的
+  `zotero-pdf-bridge` 插件的 `/pdf-bridge/<itemKey>` 只读获取 base64，**不访问 Windows 文件系统**
+  （无 `/mnt`、无 `C:`、无 `~/Zotero/storage`）。
 - **两个 skill 功能不一致，按需选用**（详见下方"两个 skill 的区别"）：
   - `zotero-annotations`：**只读批注元数据**（轻量，Python 脚本，免审批）
   - `zotero-annotations-cli`：**完整版**（元数据 + 原文上下文 + 导出全文/PDF，打包为可执行文件）
@@ -45,7 +49,7 @@
 
 ## 它是如何工作的
 
-整体分两层，各自独立：
+整体分两层，各自独立（读批注元数据 → Zotero 本地 API；读 PDF 原文 → Zotero PDF Bridge）：
 
 ### 第 1 层：读取批注 —— Zotero 本地 API（只读）
 
@@ -98,12 +102,17 @@ zotero-annotations/
 │       ├── SKILL.md
 │       ├── README.md                  # CLI 用法/钩子/打包说明
 │       └── scripts/zotero_annotations_cli.py   # 构建源码（打包为可执行文件，不直接运行）
+├── zotero-pdf-bridge/                 # Zotero 9 插件源码：只读 PDF 原文（base64 传输）
+│   ├── manifest.json
+│   ├── bootstrap.js
+│   ├── README.md                      # 为什么存在/接口/安装/构建/烟测/安全边界
+│   └── build.sh                       # POSIX sh 打包脚本（产物 zotero-pdf-bridge.xpi 不入库）
 ├── hook/
 │   ├── auto-allow-zotero.py           # skill 1 免审批钩子（匹配 zotero_annotations.py）
 │   └── auto-allow-zotero-cli.py       # skill 2 免审批钩子（匹配可执行文件，全放行）
 ├── zotero_annotations_cli.spec        # CLI 打包配置（onedir 单一文件夹）
 ├── build_exe.bat                      # 一键打包脚本（产物不提交仓库）
-└── .gitignore                         # 忽略缓存 / __pycache__ / build / dist
+└── .gitignore                         # 忽略缓存 / __pycache__ / build / dist / *.xpi
 ```
 
 ---
@@ -122,7 +131,22 @@ zotero-annotations/
 > 优先级：`<项目>/.zcode/skills` > `<项目>/.agents/skills` > `~/.zcode/skills` > `~/.agents/skills`。
 > 同名 skill 只加载最先命中的一份。
 
-### 2. （可选）安装免审批钩子
+### 2. （可选）安装 zotero-pdf-bridge 插件（读 PDF 原文才需要）
+
+只有要读 **PDF 原文**（CLI 的上下文/全文/导出）才需要安装本仓库自带的 `zotero-pdf-bridge` 插件；
+只看批注元数据（skill 1 或 CLI 元数据模式）**不需要**它。
+
+```text
+GitHub Releases
+→ 下载 zotero-pdf-bridge.xpi
+→ Zotero
+→ Plugins / Add-ons
+→ Install Add-on From File
+```
+
+详见 `zotero-pdf-bridge/README.md`（含 `/pdf-bridge/ping` 与 `G56EI7SD` 的 curl 烟测命令）。
+
+### 3. （可选）安装免审批钩子
 
 两个钩子二选一（按你要用的 skill）：
 - 只用元数据（`zotero-annotations`）→ `hook/auto-allow-zotero.py`
@@ -239,7 +263,8 @@ STATUS: OK | mode=context | item=KEY | contexts=N | before=2 after=2 | fulltext_
 | 404 NOT_FOUND | 集合或条目未找到 |
 | 300 MULTIPLE_CHOICES | 标题歧义（列出候选 key） |
 | 422 UNPROCESSABLE_ENTITY | 条目无 PDF 附件 |
-| 404 PDF_NOT_FOUND | 本地找不到 PDF 文件（未同步/网页快照） |
+| 404 PDF_NOT_FOUND | PDF Bridge 取不到 PDF（未装插件/未同步/网页快照） |
+| 500 INVALID_PDF | PDF Bridge 返回的数据不是有效 PDF（不以 `%PDF-` 开头） |
 
 > 进程退出码仅 `0` 成功 / `1` 失败（HTTP 码 >255 会被 shell 截断，故只放在文字里）。
 
@@ -270,12 +295,28 @@ COMMENT: 批注
 
 - **元数据模式**：只向 Zotero 本地 API 发 GET，读 `collections / items / attachments /
   annotations` 元数据。**不读 PDF**。
-- **上下文模式**：读取 Zotero 本地存储里的 PDF（只读），按批注 `annotationPosition`
-  精确定位高亮处，输出前后 N 句（PyMuPDF 已内置进 exe，无需另装）。
-- **全程只读**：两种模式都不写库、不改 PDF、不下载。因此对应钩子对本 CLI **所有调用
+- **上下文模式**：经 `zotero-pdf-bridge` 的 `/pdf-bridge/<itemKey>` 只读获取 PDF（base64），
+  按批注 `annotationPosition` 精确定位高亮处，输出前后 N 句（PyMuPDF 已内置进 exe，无需另装）。
+- **全程只读**：两种模式都不写库、不改 PDF、不下载，也不碰 Windows 文件系统
+  （无 `/mnt`、无 `C:`、无 `~/Zotero/storage`）。因此对应钩子对本 CLI **所有调用
   一律放行**（只读安全）。若将来给 CLI 增加写/改数据的参数，需重新收紧钩子白名单。
 - ❌ **禁止**：插件的 `zotero.py` 助手、直接 `curl`/WebFetch 访问 Zotero 本地 API、
-  下载/修改 PDF 本体、写库。
+  直接读取 Zotero 存储路径 / Windows 文件系统、下载/修改 PDF 本体、写库。
+
+---
+
+## 依赖（零第三方库原则）
+
+**两个 skill 的 Python 脚本本体都用纯标准库**（`argparse/base64/json/os/re/sys/tempfile/
+urllib`），任何装了 Python 3 的机器直接 `python3 ...zotero_annotations.py ...` 即可跑
+**元数据模式**，无需安装任何东西、无需 PyMuPDF。
+
+唯一例外是**读 PDF 原文**（CLI 的上下文/全文/导出）：
+- 直接跑 `.py` 调试时需要 PyMuPDF，装一次 `python3 -m pip install -r
+  skills/zotero-annotations-cli/requirements.txt`；没装时上下文模式报
+  `ERROR 500 DEPENDENCY_MISSING`，元数据模式照常可用。
+- 打包好的 exe（onedir）已内置 PyMuPDF，终端用户零依赖。
+- PDF 原文本身经 zotero-pdf-bridge 的 `/pdf-bridge/<itemKey>` 只读获取（base64）。
 
 ---
 
@@ -301,7 +342,7 @@ python -m PyInstaller zotero_annotations_cli.spec --noconfirm --clean
   3. onedir（单一文件夹）：启动快、免临时解压、更少杀毒误报；要单文件可改回 onefile。
   4. 杀毒误报：PyInstaller 产物常见误报，加白名单即可。
   5. 平台绑定：Windows 打的 exe 只能 Windows x64 跑；跨平台要在目标平台重打。
-- **exe 仍是本机工具**：照样要连本机 Zotero 本地 API + 读 `~/Zotero/storage/` 里的 PDF；
+- **exe 仍是本机工具**：照样要连本机 Zotero 本地 API + 经 `zotero-pdf-bridge` 只读取 PDF；
   exe 解决的是"免装 Python/PyMuPDF"，不是"脱离 Zotero 远程可用"。
 - **钩子与 exe**：钩子匹配**可执行文件本身**（支持 Windows/Unix 路径前缀、链式命令），
   对本 CLI 所有调用一律放行（只读安全）。不匹配 `cat`/`vim`/`echo` 等其它用法。
@@ -324,5 +365,8 @@ python -m PyInstaller zotero_annotations_cli.spec --noconfirm --clean
 - **提示本地 API 不可用** → 在 Zotero 设置中开启本地服务并重启：
   Settings（Preferences）→ Advanced → Server → "Allow other applications on this system to communicate with Zotero"。
 - **集合找不到** → 命令会把所有可用集合名列出来。
+- **读 PDF 时提示 `PDF Bridge is required` / `PDF_NOT_FOUND`** → 在 Zotero 里安装
+  `zotero-pdf-bridge.xpi`（GitHub Releases 下载 → Plugins / Add-ons → Install Add-on From File），
+  然后 curl 验证：`curl -fsS http://127.0.0.1:23119/pdf-bridge/ping`。
 - **仍出现审批弹窗** → 确认钩子已启用（`hooks.enabled: true`）且已注册；
   或者把该命令加入 ZCode 权限白名单 / 调整权限模式。

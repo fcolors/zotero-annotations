@@ -87,8 +87,44 @@ def check_status():
              "'Allow other applications on this system to communicate with Zotero'，然后重启 Zotero。")
 
 
+def all_collections():
+    """分页抓取库中全部 collection（默认只取前 100 条会漏掉后面的）。"""
+    cols = []
+    start = 0
+    while True:
+        batch = api(
+            "/api/users/0/collections",
+            {"format": "json", "limit": 100, "start": start},
+        )
+        if not batch:
+            break
+        cols.extend(batch)
+        if len(batch) < 100:
+            break
+        start += len(batch)
+    return cols
+
+
+def top_items():
+    """分页抓取库中全部顶层条目（默认只取前 100 条会漏掉后面的）。"""
+    items = []
+    start = 0
+    while True:
+        batch = api(
+            "/api/users/0/items/top",
+            {"format": "json", "limit": 100, "start": start},
+        )
+        if not batch:
+            break
+        items.extend(batch)
+        if len(batch) < 100:
+            break
+        start += len(batch)
+    return items
+
+
 def find_collection(name):
-    cols = api("/api/users/0/collections", {"format": "json", "limit": 100})
+    cols = all_collections()
     wanted = name.strip().lower()
     matches = [
         c["data"]
@@ -176,11 +212,18 @@ def color_name(hexc):
 
 
 def fetch_attachment_pdfs(item_key):
+    """返回某条目的 PDF 附件（须是 attachment 且 contentType=application/pdf，
+    避免把网页快照 HTML 等误当 PDF）。"""
     try:
         kids = api(f"/api/users/0/items/{item_key}/children", {"format": "json"})
     except Exception:  # noqa: BLE001
         return []
-    return [k["data"] for k in kids if k.get("data", {}).get("itemType") == "attachment"]
+    return [
+        k["data"]
+        for k in kids
+        if k.get("data", {}).get("itemType") == "attachment"
+        and k.get("data", {}).get("contentType") == "application/pdf"
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -350,10 +393,7 @@ def main():
                 sys.exit(1)  # find_collection 失败时已 fail(404)
             candidates = find_item_by_title(items_in_collection(col["key"]), args.query)
         else:
-            candidates = find_item_by_title(
-                api("/api/users/0/items/top", {"format": "json", "limit": 100}),
-                args.query,
-            )
+            candidates = find_item_by_title(top_items(), args.query)
         if not candidates:
             fail(404, "NOT_FOUND", f"没有匹配标题 '{args.query}' 的条目")
         if len(candidates) > 1:

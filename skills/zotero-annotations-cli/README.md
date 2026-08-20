@@ -1,11 +1,18 @@
 # zotero-annotations-cli
 
 合并版 Zotero 批注命令行工具（**单一命令**）：读批注元数据，或读批注原文上下文
-（前后 N 句），可导出全文 / PDF 副本。全程只读（Zotero 本地 API + 本地 PDF）。
+（前后 N 句），可导出全文 / PDF 副本。全程只读（元数据/批注走 Zotero 本地 API；
+PDF 原文经 zotero-pdf-bridge 的 `/pdf-bridge/<itemKey>` 只读获取，不访问 Windows 文件系统）。
 
 **CLI 是独立可执行文件，与 Python 完全解耦**：运行形态是 `zotero_annotations_cli`
 （Windows 为 `zotero_annotations_cli.exe`），不需要安装 Python / PyMuPDF。
 Python 脚本 `scripts/zotero_annotations_cli.py` 只是**构建源码**，不是运行方式。
+
+> **零第三方依赖**：元数据模式只用 Python 标准库（argparse/base64/json/os/re/sys/
+> tempfile/urllib），任何装了 Python 3 的机器直接 `python3 scripts/zotero_annotations_cli.py
+> --key XXXX` 就能跑，无需安装任何东西；只有**上下文模式**（读 PDF 原文）需要 PyMuPDF，
+> 且仅直接跑 `.py` 时需手动装（`pip install -r requirements.txt`）——正式分发的 exe 已内置。
+> 缺依赖时上下文模式报 `ERROR 500 DEPENDENCY_MISSING`，元数据模式照常可用。
 
 ---
 
@@ -29,8 +36,8 @@ Python 脚本 `scripts/zotero_annotations_cli.py` 只是**构建源码**，不�
 
 - **匹配可执行文件而非 Python**：CLI 已与 Python 解耦，运行的就是可执行文件；`.py`
   只是构建源码，不是调用方式，钩子无需（也不应）匹配它。
-- **为什么全放行**：CLI 全程只读——只发本地 API GET + 读本地 PDF，绝不写库、不改 PDF、
-  不下载。所有参数组合都安全。
+- **为什么全放行**：CLI 全程只读——只发本地 API GET，需要 PDF 时经 zotero-pdf-bridge
+  只读取（base64，不碰 Windows 文件系统），绝不写库、不改 PDF、不下载。所有参数组合都安全。
 - **安全边界**：若将来给 CLI 增加写/改数据的参数，必须收紧此钩子的白名单。
 
 ### 安装钩子

@@ -11,7 +11,10 @@ zotero_annotations_cli.py — Zotero 批注命令行工具（单一命令，参�
     中的任一 → 上下文模式，读 PDF 原文，按批注精确位置（annotationPosition）
     提取高亮处前后 N 句，可导出全文/PDF 副本。需要 PyMuPDF。
 
-本命令全程只读（Zotero 本地 API + 本地存储 PDF），绝不写库、不改 PDF。
+本命令全程只读（Zotero 本地 API 取元数据/批注；需要 PDF 原文时经
+Zotero PDF Bridge 的 /pdf-bridge/<itemKey> 只读获取），绝不写库、不改 PDF。
+元数据/批注模式只访问 Zotero Local API，不要求安装 PDF Bridge；只有
+context / fulltext / export-pdf 才需要 PDF Bridge。
 
 用法（本源码打包为可执行文件后运行；Windows 下为 zotero_annotations_cli.exe）：
   zotero_annotations_cli --key ASDFGHJK                      # 元数据
@@ -44,18 +47,20 @@ zotero_annotations_cli.py — Zotero 批注命令行工具（单一命令，参�
 """
 
 import argparse
+import base64
 import datetime
-import glob
 import json
 import os
 import re
-import shutil
 import sys
 import tempfile
 import urllib.request
 import urllib.parse
 
 BASE = "http://127.0.0.1:23119"
+
+# Zotero PDF Bridge 只读 PDF 端点（需要 PDF 原文时才访问，元数据/批注模式不要求）。
+BRIDGE_BASE = BASE + "/pdf-bridge"
 
 # Zotero 内置批注颜色（hex -> 友好名）。
 COLOR_NAMES = {
@@ -109,8 +114,44 @@ def check_status():
              "'Allow other applications on this system to communicate with Zotero'，然后重启 Zotero。")
 
 
+def all_collections():
+    """分页抓取库中全部 collection（默认只取前 100 条会漏掉后面的）。"""
+    cols = []
+    start = 0
+    while True:
+        batch = api(
+            "/api/users/0/collections",
+            {"format": "json", "limit": 100, "start": start},
+        )
+        if not batch:
+            break
+        cols.extend(batch)
+        if len(batch) < 100:
+            break
+        start += len(batch)
+    return cols
+
+
+def top_items():
+    """分页抓取库中全部顶层条目（默认只取前 100 条会漏掉后面的）。"""
+    items = []
+    start = 0
+    while True:
+        batch = api(
+            "/api/users/0/items/top",
+            {"format": "json", "limit": 100, "start": start},
+        )
+        if not batch:
+            break
+        items.extend(batch)
+        if len(batch) < 100:
+            break
+        start += len(batch)
+    return items
+
+
 def find_collection(name):
-    cols = api("/api/users/0/collections", {"format": "json", "limit": 100})
+    cols = all_collections()
     wanted = name.strip().lower()
     matches = [
         c["data"]
@@ -195,11 +236,36 @@ def color_name(hexc):
 
 
 def fetch_attachment_pdfs(item_key):
+    """返回某条目的 PDF 附件（须是 attachment 且 contentType=application/pdf，
+    避免把网页快照 HTML 等误当 PDF）。"""
     try:
         kids = api(f"/api/users/0/items/{item_key}/children", {"format": "json"})
     except Exception:  # noqa: BLE001
         return []
-    return [k["data"] for k in kids if k.get("data", {}).get("itemType") == "attachment"]
+    return [
+        k["data"]
+        for k in kids
+        if k.get("data", {}).get("itemType") == "attachment"
+        and k.get("data", {}).get("contentType") == "application/pdf"
+    ]
+
+
+def fetch_pdf_bytes(item_key):
+    """通过 Zotero PDF Bridge 只读获取 PDF 字节（base64 文本传输）。
+    用 parent item key（Bridge 亦接受 attachment key）。找不到/未安装时 fail。"""
+    url = BRIDGE_BASE + "/" + urllib.parse.quote(item_key)
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            encoded = resp.read()
+        data = base64.b64decode(encoded, validate=True)
+    except Exception as exc:  # noqa: BLE001
+        fail(404, "PDF_NOT_FOUND",
+             f"无法通过 Zotero PDF Bridge 获取 PDF: {exc}\n"
+             "Zotero PDF Bridge is required for PDF access. "
+             "Install zotero-pdf-bridge.xpi from this repository's GitHub Releases.")
+    if not data.startswith(b"%PDF-"):
+        fail(500, "INVALID_PDF", "Zotero PDF Bridge 返回的数据不是有效 PDF")
+    return data
 
 
 def locate_item(args):
@@ -212,10 +278,7 @@ def locate_item(args):
             sys.exit(1)
         candidates = find_item_by_title(items_in_collection(col["key"]), args.query)
     else:
-        candidates = find_item_by_title(
-            api("/api/users/0/items/top", {"format": "json", "limit": 100}),
-            args.query,
-        )
+        candidates = find_item_by_title(top_items(), args.query)
     if not candidates:
         fail(404, "NOT_FOUND", f"没有匹配标题 '{args.query}' 的条目")
     if len(candidates) > 1:
@@ -362,55 +425,6 @@ def render_rows(rows, no_color):
 # ---------------------------------------------------------------------------
 # 上下文提取（基于批注精确位置 annotationPosition）
 # ---------------------------------------------------------------------------
-
-def zotero_data_dir_candidates():
-    """收集可能的 Zotero 数据目录：prefs.js 里的 dataDir + 默认 ~/Zotero。"""
-    out = []
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        for prefs in (
-            glob.glob(os.path.join(appdata, "Zotero", "Zotero", "prefs.js"))
-            + glob.glob(os.path.join(appdata, "Zotero", "Zotero", "*", "prefs.js"))
-        ):
-            try:
-                with open(prefs, encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        m = re.search(
-                            r'user_pref\("extensions\.zotero\.dataDir",\s*"([^"]*)"\)',
-                            line,
-                        )
-                        if m:
-                            out.append(m.group(1).encode().decode("unicode_escape"))
-            except OSError:
-                pass
-    out.append(os.path.join(os.path.expanduser("~"), "Zotero"))
-    return out
-
-
-def locate_pdf_file(att):
-    """在 Zotero 本地存储里定位 PDF 文件的绝对路径（只读）。找不到返回 None。"""
-    link = att.get("linkMode") or ""
-    path = att.get("path") or ""
-    fname = att.get("filename") or ""
-    key = att.get("key")
-    if link == "linked_file" and path:
-        p = path[len("attachments:") :] if path.startswith("attachments:") else path
-        if os.path.exists(p):
-            return p
-    if path.startswith("storage:"):
-        fname = path[len("storage:") :] or fname
-    for data_dir in zotero_data_dir_candidates():
-        p = os.path.join(data_dir, "storage", key, fname)
-        if os.path.exists(p):
-            return p
-    for data_dir in zotero_data_dir_candidates():
-        d = os.path.join(data_dir, "storage", key)
-        if os.path.isdir(d):
-            pdfs = glob.glob(os.path.join(d, "*.pdf"))
-            if pdfs:
-                return pdfs[0]
-    return None
-
 
 def conv_rect(page, r):
     """Zotero annotationPosition 的 rect 是 PDF 原生坐标（左下原点）；
@@ -685,20 +699,18 @@ def cmd_annotate(args):
 def cmd_context(args):
     if fitz is None:
         fail(500, "DEPENDENCY_MISSING",
-             "本机未安装 PyMuPDF，无法读取 PDF 原文。请先执行：pip install pymupdf")
+             "本机未安装 PyMuPDF，无法读取 PDF 原文。直接跑 .py 时请先执行："
+             "python3 -m pip install -r <skill目录>/requirements.txt")
 
     item = locate_item(args)
     pdfs = fetch_attachment_pdfs(item["key"])
     if not pdfs:
         fail(422, "UNPROCESSABLE_ENTITY", f"条目 {item['key']} 没有 PDF 附件")
-    att = pdfs[0]
-    pdf_path = locate_pdf_file(att)
-    if not pdf_path:
-        fail(404, "PDF_NOT_FOUND",
-             f"在 Zotero 本地存储中找不到附件 {att.get('filename') or att['key']} 的 PDF 文件"
-             "（可能未同步或为网页快照）。")
 
-    doc = fitz.open(pdf_path)
+    # 通过 Zotero PDF Bridge 只读获取 PDF 字节（用 parent item key，Bridge 亦接受 attachment key）。
+    pdf_bytes = fetch_pdf_bytes(item["key"])
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pdf_source = BRIDGE_BASE + "/" + urllib.parse.quote(item["key"])
 
     pdf_keys = {p["key"] for p in pdfs}
     raw = [a for a in all_annotations() if a["data"].get("parentItem") in pdf_keys]
@@ -765,7 +777,8 @@ def cmd_context(args):
             f.write(extract_fulltext(doc))
     if args.export_pdf:
         pdf_out = os.path.join(cache_dir, item["key"] + ".pdf")
-        shutil.copy2(pdf_path, pdf_out)
+        with open(pdf_out, "wb") as f:
+            f.write(pdf_bytes)
 
     if args.json:
         print(json.dumps({
@@ -775,7 +788,7 @@ def cmd_context(args):
                 "creators": creator_string(item),
                 "year": item.get("date", ""),
             },
-            "pdf_source": pdf_path,
+            "pdf_source": pdf_source,
             "exports": {"fulltext_txt": txt_path, "pdf_copy": pdf_out},
             "contexts": results,
         }, ensure_ascii=False, indent=2))
@@ -784,7 +797,7 @@ def cmd_context(args):
     print("=" * 72)
     print("Title :", item.get("title"))
     print("Author:", creator_string(item))
-    print("PDF   :", pdf_path)
+    print("PDF   :", pdf_source)
     print(f"STATUS: OK | mode=context | item={item['key']} | contexts={len(results)} "
           f"| before={args.before} after={args.after} "
           f"| fulltext_txt={txt_path or 'none'} | pdf_copy={pdf_out or 'none'}")

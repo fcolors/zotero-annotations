@@ -11,3 +11,10 @@ dist/
 *.spec.bak
 
 out/
+
+# Zotero PDF Bridge：源码入仓，.xpi 仅作为 GitHub Release artifact 发布
+zotero-pdf-bridge/*.xpi
+
+# 不提交源码打包 zip / 临时 PDF / 测试输出
+*.zip
+*.pdf

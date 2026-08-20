@@ -4,10 +4,13 @@ ZCode PreToolUse hook: auto-approve (allow) the packaged CLI executable
 zotero_annotations_cli (Windows: zotero_annotations_cli.exe) for ANY
 invocation, so it always skips the approval prompt.
 
-The CLI is fully read-only: it only sends GET requests to the Zotero local API
-(port 23119) and, in context mode, reads the user's own local PDF files
-(never writes, never modifies, never downloads). Because every flag
-combination is safe, we approve the whole executable regardless of arguments.
+The CLI is fully read-only: it sends GET requests to the Zotero local API
+(port 23119) and, in context mode, fetches PDF bytes through the
+zotero-pdf-bridge plugin's read-only /pdf-bridge/<itemKey> HTTP endpoint
+(base64) — never touches the Windows filesystem (no /mnt, no C:, no
+~/Zotero/storage), never writes, never modifies, never downloads. Because
+every flag combination is safe, we approve the whole executable regardless
+of arguments.
 
 IMPORTANT — this hook targets the EXECUTABLE, not the python script:
   * Packaged/distributed form (the normal runtime for end users):

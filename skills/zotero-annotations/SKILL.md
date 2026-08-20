@@ -1,6 +1,6 @@
 ---
 name: zotero-annotations
-description: 读取本地 Zotero 文献 PDF 里的批注（高亮/下划线/笔记），按颜色和页码展示。当用户问"某篇文献/某个集合里我标了什么、有哪些批注/标注/高亮"时使用。增量输出，只打印新增/变化的批注，避免浪费 token。另有 zotero_context.py 可在用户明确要求"看批注的原文上下文"时，从 PDF 提取高亮处前后若干句。
+description: 读取本地 Zotero 文献 PDF 里的批注（高亮/下划线/笔记），按颜色和页码展示。当用户问"某篇文献/某个集合里我标了什么、有哪些批注/标注/高亮"时使用。增量输出，只打印新增/变化的批注，避免浪费 token。本 skill 只读批注**元数据**；如需"看批注的原文上下文（前后几句）"，请用配套的 zotero-annotations-cli skill（读 PDF 原文需 zotero-pdf-bridge 插件）。
 ---
 
 # Zotero 批注读取
@@ -14,6 +14,11 @@ python3 <skill目录>/scripts/zotero_annotations.py <args>
 ```
 
 只允许执行这条命令取批注，其余一律禁用（curl、插件 zotero.py、fulltext、直接读取 PDF）。
+
+**零依赖**：本脚本只用 Python 标准库（argparse/datetime/json/os/sys/tempfile/urllib），
+任何装了 Python 3 的机器直接 `python3 .../zotero_annotations.py <args>` 即可，无需
+安装任何第三方库、无需 PyMuPDF（本 skill 不读 PDF）。若报 `ModuleNotFoundError`，
+说明运行环境缺失标准库（几乎不可能），按报错排查即可。
 
 脚本内部完成：**端口检查**（查 `/api/schema`，不可用则 exit 2）→ **只读** Zotero 本地 API 取批注元数据。
 
@@ -57,19 +62,23 @@ python3 <skill目录>/scripts/zotero_annotations.py <args>
 ## 工作流
 1. 运行脚本**一次**（用 `--key` 或 `--query [--collection]`）。
 2. 按输出原样呈现（增量在前，注明条数）；`--json` 时说明缓存路径。
-3. 用户要"原文/PDF 段落"：**只有**在用户明确要求看批注原文上下文时，才使用下面的命令2（`zotero_context.py`），且要说明它需要读取 PDF 原文、依赖 PyMuPDF。
+3. 用户要"原文/PDF 段落/上下文"：**只有**在用户明确要求看批注原文上下文（前后几句）时，
+   改用配套 skill **`zotero-annotations-cli`** 的上下文模式（`--color` / `--ann-key` /
+   `--before/--after` 等），并说明它需要读 PDF 原文（依赖 `zotero-pdf-bridge` 插件）。
+   本 skill 的脚本**只读批注元数据，不提供** `zotero_context.py`（旧版已并入 CLI）。
 
-### 命令2：批注原文上下文（用户明确要求时才用，读 PDF）
+### 需要"原文上下文"时 → 用 zotero-annotations-cli（读 PDF）
 
-当用户说"看某条/某颜色批注的原文上下文/前后几句/解释一下"时，用：
+当用户说"看某条/某颜色批注的原文上下文/前后几句/解释一下"时，改用配套 skill：
 
 ```bash
-python3 <skill目录>/scripts/zotero_context.py --key <item_key> [--color red|blue|...] [--ann-key <ann_key>] [--before 2] [--after 2]
+zotero_annotations_cli --key <item_key> [--color red|blue|...] [--ann-key <ann_key>] [--before 2] [--after 2]
 ```
 
-- 依赖本机 **PyMuPDF**（`pip install pymupdf`），脚本会**只读** Zotero 本地存储里的 PDF 文件。
+- CLI 通过 `zotero-pdf-bridge` 的 `/pdf-bridge/<itemKey>` **只读**获取 PDF（base64），
+  不访问 Windows 文件系统（无 `/mnt`、无 `C:`、无 `~/Zotero/storage`）。
 - 原理：用批注的 `annotationPosition`（精确矩形坐标）定位高亮处，输出所在句及前后 N 句（默认各 2 句，共 5 句）。
-- 参数：`--color`（颜色名或 hex，可多次）、`--ann-key`（批注 key，可多次）、`--before/--after`（句数）、`--fulltext`（导出全文 txt 到 `<cache>/<key>.txt`）、`--export-pdf`（复制 PDF 到 `<cache>/<key>.pdf`，按 key 命名，可对接 PDF 阅读插件）。
+- 参数：`--color`（颜色名或 hex，可多次）、`--ann-key`（批注 key，可多次）、`--before/--after`（句数）、`--fulltext`（导出全文 txt 到 `<cache>/<key>.txt`）、`--export-pdf`（导出 PDF 副本到 `<cache>/<key>.pdf`）。
 - 输出格式（可 grep `<<<CTX` 定位）：
   ```text
   <<<CTX key=XXXX color=red page=1
