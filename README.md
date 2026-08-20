@@ -22,9 +22,9 @@
 - **PDF 原文走 Zotero PDF Bridge**：需要读 PDF 原文（上下文/全文/导出）时，通过仓库自带的
   `zotero-pdf-bridge` 插件的 `/pdf-bridge/<itemKey>` 只读获取 base64，**不访问 Windows 文件系统**
   （无 `/mnt`、无 `C:`、无 `~/Zotero/storage`）。
-- **两个 skill 功能不一致，按需选用**（详见下方"两个 skill 的区别"）：
-  - `zotero-annotations`：**只读批注元数据**（轻量，Python 脚本，免审批）
-  - `zotero-annotations-cli`：**完整版**（元数据 + 原文上下文 + 导出全文/PDF，打包为可执行文件）
+- **两个 skill 功能一致、仅运行形态不同**（详见下方"两个 skill 的区别"）：
+  - `zotero-annotations`：Python 脚本（`.py`，直接跑；元数据零第三方依赖）
+  - `zotero-annotations-cli`：同一功能打包为独立可执行文件（exe，免装 Python/PyMuPDF）
 - skill、CLI、钩子相互独立，可单独使用
 
 ### 如何开启 Zotero 本地 API（前置条件）
@@ -95,7 +95,7 @@ zotero-annotations/
 ├── README.md
 ├── LICENSE
 ├── skills/
-│   ├── zotero-annotations/            # skill 1：只读批注元数据（纯标准库，免审批）
+│   ├── zotero-annotations/            # skill 1：Python 脚本直接跑（元数据零依赖；上下文需 PyMuPDF）
 │   │   ├── SKILL.md
 │   │   └── scripts/zotero_annotations.py
 │   └── zotero-annotations-cli/        # skill 2：合并版 CLI（元数据 + 原文上下文）
@@ -181,32 +181,35 @@ GitHub Releases
 
 ---
 
-## 两个 skill 的区别（功能不一致，按需选用）
+## 两个 skill 的区别（同一功能，仅运行形态不同）
 
-两个 skill **不是**同一功能的两种安装形态，而是**功能层级不同**：
+两个 skill **功能一致**（元数据 + 上下文 + 全文/PDF 导出），只是**运行形态不同**：
 
 | 能力 | `zotero-annotations` | `zotero-annotations-cli` |
 |---|---|---|
 | 读批注元数据（颜色/页码/批注文本） | ✅ | ✅ |
 | 增量缓存 / 阅读定位 | ✅ | ✅ |
-| 读原文上下文（高亮前后 N 句） | ❌ | ✅ |
-| 导出全文 txt / PDF 副本 | ❌ | ✅ |
-| 运行形态 | Python 脚本（`.py`） | 独立可执行文件（exe） |
+| 获取 Zotero 中的 PDF / 读原文上下文（高亮前后 N 句） | ✅ | ✅ |
+| 导出全文 txt / PDF 副本 | ✅ | ✅ |
+| 运行形态 | Python 脚本（`.py`，直接跑） | 独立可执行文件（exe，免装 Python/PyMuPDF） |
 | 免审批钩子 | 匹配 `.py` 脚本 | 匹配可执行文件 |
 
-- **只要批注元数据** → 用 `zotero-annotations`（轻量，不碰 PDF）。
-- **还要原文上下文 / 导出** → 用 `zotero-annotations-cli`（完整版）。
+- **环境里装了 Python 3** → 用 `zotero-annotations`（直接 `python3` 跑 .py，元数据零依赖）。
+- **终端用户免装 Python** → 用 `zotero-annotations-cli`（打包 exe，PyMuPDF 已内置）。
+- 两者**共用同一份逻辑与输出协议**，读 PDF 原文都走 `zotero-pdf-bridge`（base64 只读）。
 
 ---
 
 ## 使用
 
-### skill 1：`zotero-annotations`（只读批注元数据）
+### skill 1：`zotero-annotations`（`.py` 直接运行，功能与 CLI 一致）
 
 ```bash
 python3 skills/zotero-annotations/scripts/zotero_annotations.py --query "示例标题" [--collection "示例合集"]
 python3 skills/zotero-annotations/scripts/zotero_annotations.py --key ASDFGHJK
 python3 skills/zotero-annotations/scripts/zotero_annotations.py --key ASDFGHJK --full
+python3 skills/zotero-annotations/scripts/zotero_annotations.py --key ASDFGHJK --color red --before 2 --after 2   # 上下文模式
+python3 skills/zotero-annotations/scripts/zotero_annotations.py --key ASDFGHJK --fulltext --export-pdf          # 导出
 ```
 
 ### skill 2：`zotero-annotations-cli`（合并版，单一命令，独立可执行文件）
